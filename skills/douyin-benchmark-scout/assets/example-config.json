@@ -1,5 +1,7 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
+  "compliance_acknowledged": false,
+  "resource_mode": "low",
   "说明": "关键词、时间窗口、爆款门槛都集中在这里。搜索默认使用可见浏览器；空结果会重试，仍为空则整轮停止，不会把缺失关键词伪装成已完成。",
   "keywords": [
     "AI工作流",
@@ -72,10 +74,10 @@
   "transcription": {
     "enabled": true,
     "python": "",
-    "model": "small",
+    "model": "base",
     "language": "Chinese",
     "device": "cpu",
-    "threads": 2
+    "threads": 1
   },
   "cleanup": {
     "delete_video_after_analysis_and_excel": true,

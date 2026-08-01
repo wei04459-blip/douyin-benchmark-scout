@@ -7,12 +7,20 @@ description: Run an end-to-end, resumable Douyin competitor-research workflow co
 
 把抖音公开竞品研究当成可审计的数据流水线。搜索成功不等于任务成功；必须完成逐词配额、转录、分析、工作簿校验和安全清理。
 
+## 对新手的交互原则
+
+- 先替用户执行体检并翻译结果，不让用户自己猜命令或错误信息。
+- 安装、扫码、合规确认和选择关键词之外，能由代理完成的步骤直接完成。
+- 默认低占用，不因追求速度提高并发、Whisper 模型或线程数。
+- 失败时保留断点，明确告诉用户“已完成到哪、什么没完成、继续时会不会重复”。
+- 最终只把可打开的 Excel、数量摘要和需要用户判断的内容交付出来。
+
 ## 第一次运行
 
 1. 先阅读 `references/privacy-compliance.md`。若用途与上游许可证或平台规则冲突，暂停并说明限制。
-2. 运行 `python scripts/doctor.py`。新电脑、依赖升级、转录异常或浏览器异常时都要重跑。
+2. 新手优先运行 `python scripts/start.py`，按中文菜单完成合规确认、体检、配置和第一次低占用批次。macOS 可双击 `开始使用.command`，Windows 可双击 `开始使用.bat`。
 3. 缺依赖时先运行 `python scripts/bootstrap.py` 查看安装计划。只有用户明确允许联网安装后才加 `--apply`。
-4. 使用 `assets/example-config.json` 作为配置起点。默认配置会复制到 `~/.douyin-benchmark-scout/config.json`；不要修改 Skill 内的示例文件来保存登录信息或私人路径。
+4. 默认配置会复制到 `~/.douyin-benchmark-scout/config.json`；不要修改 Skill 内的示例文件来保存登录信息或私人路径。
 5. 首次搜索由用户本人扫码登录。不得导出 Cookie 或浏览器资料。
 
 ## 标准流程
@@ -38,7 +46,7 @@ python scripts/run.py collect \
   --download-limit 6
 ```
 
-默认单并发、可见搜索、关键词间隔和低资源转录。不要擅自提高并发。若设备发热，保持 `threads: 2`，把 Whisper 模型改为 `base`，一次只处理一条。
+默认单并发、可见搜索、关键词间隔和低资源转录。不要擅自提高并发。默认使用 Whisper `base`、`threads: 1`，一次只处理一条。
 
 搜索出现空结果时，完整执行 `references/search-reliability.md`。任何关键词未达配额都视为整批未完成；保留检查点并恢复，不得伪造空关键词成功状态。
 
@@ -61,6 +69,8 @@ python scripts/run.py finalize \
 
 只有 finalize 成功后才把作品写入 `processed_aweme_ids`。任何分析缺失、XLSX 无法重开或字段错位都必须阻止清理。
 
+关键词游标也只能在 finalize 完成后推进。采集阶段把候选游标写入运行目录的 `批次状态.json`；不得提前提交。
+
 ### 5. 安全清理和交付
 
 清理仅针对当前运行目录中已有口播稿且已经写入验证工作簿的明确视频文件。保留：
@@ -81,7 +91,7 @@ python scripts/run.py finalize \
 - 只重建 Excel：对已有运行目录重新执行 `finalize`。
 - 页面搜索兜底：由主流程自动调用 `search_page_fallback.py`。
 - 作者公开指标补充：由主流程自动调用 `enrich_creator_metrics.py`。
-- 浏览器桥接补下载：`browser_download_fallback.py` 和 `retry_failed_downloads.py` 是可选适配器，仅在用户明确允许、兼容本地适配器存在时使用；登录信息不得落盘或上传。
+- 迁移旧缓存：先运行 `python scripts/migrate_legacy.py --source <旧缓存目录>` 预览；确认后加 `--copy-transcripts --apply`。只复制状态、最新 Excel 和口播稿，绝不复制或删除旧视频。
 
 ## 数据位置
 
@@ -94,4 +104,3 @@ python scripts/run.py finalize \
 - `CHROME_PATH`
 
 绝不把 `.auth/`、浏览器 profile、Cookie、真实视频、真实口播稿、真实工作簿或本地账号资料提交 GitHub。
-

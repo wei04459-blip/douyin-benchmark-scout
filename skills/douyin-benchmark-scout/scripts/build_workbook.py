@@ -74,7 +74,16 @@ def make_row(item, analysis, serial, rules):
     if isinstance(source_keywords, list):
         source_keywords = "、".join(map(str, source_keywords))
     transcript = str(item.get("transcript_path") or "")
-    video_status = "已完成转录与分析，等待安全清理" if transcript else str(item.get("video_path") or "")
+    video_status = str(item.get("video_status") or "")
+    if not video_status:
+        if item.get("video_deleted_at"):
+            video_status = "已完成转录与分析，原视频已删除"
+        elif transcript and item.get("video_path"):
+            video_status = "已完成转录与分析，等待安全清理"
+        elif transcript:
+            video_status = "已保留口播稿，本地原视频不存在"
+        else:
+            video_status = str(item.get("video_path") or "未下载")
     return [
         serial, analysis["track"], item.get("aweme_url") or f"https://www.douyin.com/video/{item['aweme_id']}",
         item.get("nickname") or "", fans, number(item.get("creator_total_favorited")), published,

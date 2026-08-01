@@ -43,6 +43,7 @@ ANALYSIS_FIELDS = [
     "viral",
     "migration",
 ]
+RUN_CHECKPOINT = "批次状态.json"
 
 
 def read_json(path: Path, default=None):
@@ -75,6 +76,22 @@ def first_existing(*candidates: Path) -> Path | None:
     return next((path for path in candidates if path and path.exists()), None)
 
 
+def python_has_modules(python: Path | str | None, modules: tuple[str, ...]) -> bool:
+    if not python or not Path(python).is_file():
+        return False
+    expression = " and ".join(f"importlib.util.find_spec({name!r})" for name in modules)
+    try:
+        return subprocess.run(
+            [str(python), "-c", f"import importlib.util,sys;sys.exit(0 if {expression} else 1)"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=20,
+            check=False,
+        ).returncode == 0
+    except Exception:
+        return False
+
+
 def resolve_runtime_paths(config: dict) -> dict:
     paths = config.setdefault("paths", {})
     crawler_root = Path(
@@ -97,9 +114,18 @@ def resolve_runtime_paths(config: dict) -> dict:
     )
     paths["media_crawler_root"] = str(crawler_root)
     paths["media_crawler_python"] = str(crawler_python or sys.executable)
-    paths["workbook_python"] = str(
-        Path(paths.get("workbook_python") or crawler_python or sys.executable).expanduser()
+    python_candidates = [
+        crawler_python,
+        Path(sys.executable),
+        Path.home() / ".local" / "bin" / "python3.11",
+        Path("/usr/bin/python3"),
+    ]
+    configured_workbook = Path(paths["workbook_python"]).expanduser() if paths.get("workbook_python") else None
+    workbook_python = next(
+        (candidate for candidate in [configured_workbook, *python_candidates] if python_has_modules(candidate, ("openpyxl",))),
+        configured_workbook or crawler_python or Path(sys.executable),
     )
+    paths["workbook_python"] = str(workbook_python)
     paths["workbook_template"] = str(
         Path(paths.get("workbook_template") or ASSETS_DIR / "benchmark-template.xlsx").expanduser()
     )
@@ -110,9 +136,13 @@ def resolve_runtime_paths(config: dict) -> dict:
             or crawler_root / "browser_data" / "cdp_dy_user_data_dir"
         ).expanduser()
     )
-    config.setdefault("transcription", {})["python"] = str(
-        Path(config.get("transcription", {}).get("python") or crawler_python or sys.executable).expanduser()
+    transcription = config.setdefault("transcription", {})
+    configured_transcription = Path(transcription["python"]).expanduser() if transcription.get("python") else None
+    transcription_python = next(
+        (candidate for candidate in [configured_transcription, *python_candidates] if python_has_modules(candidate, ("whisper", "torch"))),
+        configured_transcription or crawler_python or Path(sys.executable),
     )
+    transcription["python"] = str(transcription_python)
     return config
 
 
@@ -132,7 +162,7 @@ def load_state() -> dict:
     return read_json(
         STATE_PATH,
         {
-            "schema_version": 1,
+            "schema_version": 2,
             "keyword_cursor": 0,
             "seen_aweme_ids": [],
             "processed_aweme_ids": [],
@@ -148,6 +178,62 @@ def save_state(state: dict) -> None:
         set(map(str, state.get("processed_aweme_ids", [])))
     )
     write_json(STATE_PATH, state)
+
+
+def ffprobe_path() -> str | None:
+    configured = os.environ.get("FFPROBE_PATH")
+    if configured and Path(configured).is_file():
+        return configured
+    found = shutil.which("ffprobe")
+    if found:
+        return found
+    ffmpeg = shutil.which("ffmpeg")
+    if ffmpeg:
+        sibling = Path(ffmpeg).with_name("ffprobe")
+        if sibling.is_file():
+            return str(sibling)
+    return None
+
+
+def probe_video(path: Path) -> float:
+    """Reject HTML/error bodies and truncated media before transcription."""
+    probe = ffprobe_path()
+    if not probe:
+        ffmpeg = shutil.which("ffmpeg")
+        if not ffmpeg:
+            raise RuntimeError("缺少 FFmpeg，无法确认视频是否完整。请先运行新手向导里的环境体检。")
+        completed = subprocess.run(
+            [ffmpeg, "-v", "error", "-i", str(path), "-map", "0:v:0", "-frames:v", "1", "-f", "null", "-"],
+            capture_output=True,
+            text=True,
+            timeout=45,
+            check=False,
+        )
+        if completed.returncode != 0:
+            raise RuntimeError(f"视频文件无效：{path.name}（{completed.stderr.strip() or '没有检测到有效视频流'}）")
+        return -1.0
+    completed = subprocess.run(
+        [
+            probe,
+            "-v", "error",
+            "-select_streams", "v:0",
+            "-show_entries", "format=duration",
+            "-of", "default=noprint_wrappers=1:nokey=1",
+            str(path),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=45,
+        check=False,
+    )
+    try:
+        duration = float(completed.stdout.strip())
+    except (TypeError, ValueError):
+        duration = 0.0
+    if completed.returncode != 0 or duration <= 0:
+        detail = completed.stderr.strip() or "没有检测到有效视频流"
+        raise RuntimeError(f"视频文件无效：{path.name}（{detail}）")
+    return duration
 
 
 def find_json_files(root: Path, pattern: str) -> list[Path]:
@@ -408,11 +494,16 @@ def delete_processed_videos(
 
     deleted = 0
     deleted_at = datetime.now(SHANGHAI).isoformat()
+    allowed_root = manifest_path.parent.resolve()
     for item in items:
         video_path = item.get("video_path")
         if video_path:
-            path = Path(video_path)
+            path = Path(video_path).expanduser().resolve()
             if path.is_file():
+                try:
+                    path.relative_to(allowed_root)
+                except ValueError as exc:
+                    raise RuntimeError(f"拒绝删除运行目录之外的视频：{path}") from exc
                 path.unlink()
                 deleted += 1
         item["video_path"] = None
@@ -613,6 +704,14 @@ def download_from_search_urls(items: list[dict], run_dir: Path) -> int:
         if target.stat().st_size < 10_000:
             target.unlink(missing_ok=True)
             continue
+        try:
+            duration = probe_video(target)
+            if duration > 0:
+                item["duration_seconds"] = round(duration)
+        except RuntimeError as exc:
+            target.unlink(missing_ok=True)
+            print(f"  直链文件校验失败：{exc}", flush=True)
+            continue
         item["video_path"] = str(target)
         downloaded += 1
     return downloaded
@@ -654,7 +753,7 @@ def transcribe_videos(items: list[dict], run_dir: Path, config: dict) -> None:
             "all",
         ]
         env = os.environ.copy()
-        threads = str(transcription.get("threads", 2))
+        threads = str(transcription.get("threads", 1))
         env.update({"OMP_NUM_THREADS": threads, "MKL_NUM_THREADS": threads})
         run_command(command, PROJECT_ROOT, env)
         for generated in output_dir.glob("video.*"):
@@ -752,6 +851,10 @@ def finalize_workbook(
 
 
 def collect(args, config: dict) -> int:
+    if not config.get("compliance_acknowledged"):
+        raise RuntimeError(
+            "尚未确认 MediaCrawler 许可证与平台边界。请先运行 scripts/start.py，选择“首次设置”。"
+        )
     state = load_state()
     keywords, next_cursor = choose_keywords(
         config, state, args.keywords, args.all_keywords
@@ -1010,11 +1113,19 @@ def collect(args, config: dict) -> int:
         direct_count = download_from_search_urls(selected, run_dir)
         if direct_count:
             print(f"详情接口受限后，已用搜索直链补下载 {direct_count} 条", flush=True)
-        missing_videos = [
-            str(row["aweme_id"])
-            for row in selected
-            if not row.get("video_path") or not Path(row["video_path"]).is_file()
-        ]
+        missing_videos = []
+        for row in selected:
+            video_path = Path(row["video_path"]) if row.get("video_path") else None
+            if not video_path or not video_path.is_file():
+                missing_videos.append(str(row["aweme_id"]))
+                continue
+            try:
+                duration = probe_video(video_path)
+                if duration > 0:
+                    row["duration_seconds"] = round(duration)
+            except RuntimeError as exc:
+                print(f"  视频校验失败：{exc}", flush=True)
+                missing_videos.append(str(row["aweme_id"]))
         if missing_videos:
             raise RuntimeError(
                 "以下入选视频未成功下载，本轮拒绝标记完成："
@@ -1037,13 +1148,23 @@ def collect(args, config: dict) -> int:
     manifest_path = write_manifest(
         run_dir, selected, keywords, config, mode="live"
     )
-    state["keyword_cursor"] = next_cursor
-    selected_ids = {str(row["aweme_id"]) for row in selected}
+    write_json(
+        run_dir / RUN_CHECKPOINT,
+        {
+            "schema_version": 1,
+            "status": "awaiting_analysis",
+            "keywords": keywords,
+            "previous_keyword_cursor": int(state.get("keyword_cursor", 0)),
+            "next_keyword_cursor": int(next_cursor),
+            "created_at": datetime.now(SHANGHAI).isoformat(),
+        },
+    )
     state["seen_aweme_ids"] = sorted(seen | set(ids))
     # 这里只记录已见；只有分析、Excel 和安全清理完成后才算 processed。
     state["processed_aweme_ids"] = sorted(processed)
     state["last_run_at"] = datetime.now(SHANGHAI).isoformat()
     state["last_run_dir"] = str(run_dir)
+    state["pending_run_dir"] = str(run_dir)
     save_state(state)
     print(f"待分析数据：{manifest_path}")
     print(f"AI拆解模板：{run_dir / 'AI拆解模板.json'}")
@@ -1118,6 +1239,15 @@ def finalize(args, config: dict) -> int:
             analysis_path,
             output,
         )
+        # 清理会更新 manifest 中的真实视频状态；重建一次工作簿，避免 Excel
+        # 永远停留在“等待清理”。以刚生成的工作簿为输入可保留历史行和样式。
+        output = finalize_workbook(
+            run_dir,
+            manifest_path,
+            analysis_path,
+            config,
+            output,
+        )
     state = load_state()
     manifest = read_json(manifest_path, {}) or {}
     finalized_ids = {
@@ -1128,6 +1258,22 @@ def finalize(args, config: dict) -> int:
     state["processed_aweme_ids"] = sorted(
         set(map(str, state.get("processed_aweme_ids", []))) | finalized_ids
     )
+    checkpoint_path = run_dir / RUN_CHECKPOINT
+    checkpoint = read_json(checkpoint_path, {}) or {}
+    if checkpoint.get("status") != "complete" and checkpoint.get("next_keyword_cursor") is not None:
+        state["keyword_cursor"] = int(checkpoint["next_keyword_cursor"])
+    checkpoint.update(
+        {
+            "status": "complete",
+            "finalized_at": datetime.now(SHANGHAI).isoformat(),
+            "workbook": str(output),
+            "deleted_video_count": deleted,
+        }
+    )
+    write_json(checkpoint_path, checkpoint)
+    if state.get("pending_run_dir") == str(run_dir):
+        state["pending_run_dir"] = None
+    state["last_completed_run_dir"] = str(run_dir)
     save_state(state)
     print(f"Excel：{output}")
     print(f"已删除完成转录和分析的原视频：{deleted} 个")
@@ -1143,6 +1289,8 @@ def show_status(config: dict) -> int:
         "processed_count": len(state.get("processed_aweme_ids", [])),
         "last_run_at": state.get("last_run_at"),
         "last_run_dir": state.get("last_run_dir"),
+        "pending_run_dir": state.get("pending_run_dir"),
+        "last_completed_run_dir": state.get("last_completed_run_dir"),
         "days": config["filter"]["days"],
         "download_limit": config["run_policy"]["download_limit"],
         "breakout_rules": config["breakout_rules"],
