@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "mode": "synthetic-test",
+  "keywords": ["AI示例"],
+  "rules": {
+    "s_max_fans": 100000,
+    "s_min_likes": 10000,
+    "s_min_like_fan_ratio": 1.0,
+    "a_max_fans": 300000,
+    "a_min_likes": 30000,
+    "a_min_like_fan_ratio": 0.3,
+    "big_account_fans": 1000000,
+    "big_account_ratio_ceiling": 0.1
+  },
+  "items": [
+    {
+      "aweme_id": "9000000000000000001",
+      "aweme_url": "https://www.douyin.com/video/9000000000000000001",
+      "nickname": "示例账号",
+      "follower_count": 8000,
+      "creator_total_favorited": 250000,
+      "create_time": 1785542400,
+      "duration_seconds": 66,
+      "liked_count": 32000,
+      "comment_count": 860,
+      "collected_count": 12000,
+      "share_count": 2300,
+      "title": "虚构测试数据：普通人如何整理AI工作流",
+      "source_keywords": ["AI示例"],
+      "transcript_path": "/synthetic/not-a-real-transcript.txt"
+    }
+  ]
+}
+

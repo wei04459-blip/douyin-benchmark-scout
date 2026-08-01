@@ -1,0 +1,92 @@
+{
+  "schema_version": 1,
+  "说明": "关键词、时间窗口、爆款门槛都集中在这里。搜索默认使用可见浏览器；空结果会重试，仍为空则整轮停止，不会把缺失关键词伪装成已完成。",
+  "keywords": [
+    "AI工作流",
+    "AI副业",
+    "AI自媒体",
+    "AI搞钱",
+    "AI赚钱",
+    "AI创业",
+    "AI一人公司",
+    "AI个人IP",
+    "AI短视频",
+    "AI写作",
+    "AI电商",
+    "AI办公",
+    "AI效率",
+    "AI自动化",
+    "AI提示词",
+    "AI知识库",
+    "普通人学AI",
+    "大学生AI",
+    "文科生AI",
+    "零基础AI",
+    "AI工具",
+    "AI变现",
+    "豆包教程",
+    "Claude教程"
+  ],
+  "run_policy": {
+    "keywords_per_run": 6,
+    "results_per_keyword": 30,
+    "detail_limit": 20,
+    "download_limit": 5,
+    "pause_seconds_min": 15,
+    "pause_seconds_max": 30,
+    "skip_seen_across_runs": true
+  },
+  "search_policy": {
+    "browser_mode": "visible",
+    "max_attempts_per_keyword": 3,
+    "empty_retry_wait_seconds": 30,
+    "min_results_per_keyword": 1,
+    "abort_on_incomplete": true,
+    "page_ui_fallback": true,
+    "keyword_fallbacks": {
+      "AI工作流": ["AI 工作流", "人工智能工作流", "用AI搭工作流"],
+      "AI副业": ["AI 副业", "用AI做副业", "人工智能副业"],
+      "AI自媒体": ["AI 自媒体", "用AI做自媒体", "人工智能自媒体", "自媒体"],
+      "AI搞钱": ["AI 搞钱", "用AI搞钱", "AI变现", "搞钱"],
+      "AI赚钱": ["AI 赚钱", "用AI赚钱", "AI变现案例", "赚钱"],
+      "AI创业": ["AI 创业", "用AI创业", "人工智能创业", "创业"]
+    }
+  },
+  "filter": {
+    "days": 30,
+    "min_likes": 10000,
+    "min_favorites": 5000,
+    "min_comments": 200,
+    "preliminary_score": "点赞 + 收藏 + 2×评论 + 转发"
+  },
+  "breakout_rules": {
+    "s_max_fans": 100000,
+    "s_min_likes": 10000,
+    "s_min_like_fan_ratio": 1.0,
+    "a_max_fans": 300000,
+    "a_min_likes": 30000,
+    "a_min_like_fan_ratio": 0.3,
+    "big_account_fans": 1000000,
+    "big_account_ratio_ceiling": 0.1
+  },
+  "transcription": {
+    "enabled": true,
+    "python": "",
+    "model": "small",
+    "language": "Chinese",
+    "device": "cpu",
+    "threads": 2
+  },
+  "cleanup": {
+    "delete_video_after_analysis_and_excel": true,
+    "keep_transcript": true
+  },
+  "paths": {
+    "media_crawler_root": "",
+    "media_crawler_python": "",
+    "workbook_python": "",
+    "workbook_template": "",
+    "chrome_path": "",
+    "browser_profile": ""
+  }
+}

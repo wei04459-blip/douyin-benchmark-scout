@@ -1,0 +1,4 @@
+interface:
+  display_name: "抖音竞品选题侦察"
+  short_description: "多关键词抖音采集、转录、爆款分级、Excel归档与选题分析"
+  default_prompt: "Use $douyin-benchmark-scout to run a resumable multi-keyword Douyin competitor analysis and produce a verified workbook."
