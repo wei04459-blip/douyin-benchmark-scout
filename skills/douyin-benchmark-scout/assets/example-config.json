@@ -2,7 +2,7 @@
   "schema_version": 2,
   "compliance_acknowledged": false,
   "resource_mode": "low",
-  "说明": "关键词、时间窗口、爆款门槛都集中在这里。搜索默认使用可见浏览器；空结果会重试，仍为空则整轮停止，不会把缺失关键词伪装成已完成。",
+  "说明": "默认使用批量收集与初步分析入口。检索、指标、视频、文本和分析分别验收；保留原视频及失败记录。run_policy仅供旧版兼容，不限制本轮批量规模。",
   "keywords": [
     "AI工作流",
     "AI副业",
@@ -46,13 +46,43 @@
     "abort_on_incomplete": true,
     "page_ui_fallback": true,
     "keyword_fallbacks": {
-      "AI工作流": ["AI 工作流", "人工智能工作流", "用AI搭工作流"],
-      "AI副业": ["AI 副业", "用AI做副业", "人工智能副业"],
-      "AI自媒体": ["AI 自媒体", "用AI做自媒体", "人工智能自媒体", "自媒体"],
-      "AI搞钱": ["AI 搞钱", "用AI搞钱", "AI变现", "搞钱"],
-      "AI赚钱": ["AI 赚钱", "用AI赚钱", "AI变现案例", "赚钱"],
-      "AI创业": ["AI 创业", "用AI创业", "人工智能创业", "创业"]
-    }
+      "AI工作流": [
+        "AI 工作流",
+        "人工智能工作流",
+        "用AI搭工作流"
+      ],
+      "AI副业": [
+        "AI 副业",
+        "用AI做副业",
+        "人工智能副业"
+      ],
+      "AI自媒体": [
+        "AI 自媒体",
+        "用AI做自媒体",
+        "人工智能自媒体"
+      ],
+      "AI搞钱": [
+        "AI 搞钱",
+        "用AI搞钱",
+        "AI变现"
+      ],
+      "AI赚钱": [
+        "AI 赚钱",
+        "用AI赚钱",
+        "AI变现案例"
+      ],
+      "AI创业": [
+        "AI 创业",
+        "用AI创业",
+        "人工智能创业"
+      ]
+    },
+    "target_per_keyword": 40,
+    "max_scrolls": 12,
+    "stall_rounds": 3,
+    "max_seconds": 180,
+    "wait_seconds": 3,
+    "require_scope_completion": true
   },
   "filter": {
     "days": 30,
@@ -74,13 +104,13 @@
   "transcription": {
     "enabled": true,
     "python": "",
-    "model": "base",
+    "model": "medium",
     "language": "Chinese",
     "device": "cpu",
     "threads": 1
   },
   "cleanup": {
-    "delete_video_after_analysis_and_excel": true,
+    "delete_video_after_analysis_and_excel": false,
     "keep_transcript": true
   },
   "paths": {
@@ -90,5 +120,11 @@
     "workbook_template": "",
     "chrome_path": "",
     "browser_profile": ""
+  },
+  "collection_policy": {
+    "target": 50,
+    "analysis_depth": "initial",
+    "search_scope": "all_keywords",
+    "material_concurrency": 1
   }
 }

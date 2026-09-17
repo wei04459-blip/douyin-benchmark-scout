@@ -12,12 +12,15 @@ import platform
 import shutil
 import time
 from pathlib import Path
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
+from urllib.request import Request, urlopen
 
 from playwright.async_api import async_playwright
 
 
 SEARCH_ENDPOINT = "/aweme/v1/web/general/search/single/"
+WEBBRIDGE_ENDPOINT = "http://127.0.0.1:10086/command"
+WEBBRIDGE_SESSION = "douyin-competitor-20260804"
 
 
 def discover_chrome() -> str | None:
@@ -89,7 +92,192 @@ def convert_aweme(aweme: dict, keyword: str) -> dict:
     }
 
 
+def webbridge_call(action: str, args: dict, timeout: int = 45) -> dict:
+    body = json.dumps(
+        {"action": action, "args": args, "session": WEBBRIDGE_SESSION},
+        ensure_ascii=False,
+    ).encode("utf-8")
+    request = Request(
+        WEBBRIDGE_ENDPOINT,
+        data=body,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urlopen(request, timeout=timeout) as response:
+        envelope = json.loads(response.read().decode("utf-8"))
+    if not envelope.get("ok"):
+        raise RuntimeError(str((envelope.get("error") or {}).get("message") or envelope))
+    return envelope.get("data") or {}
+
+
+def convert_webbridge_item(item: dict, keyword: str) -> dict:
+    uid = str(item.get("uid") or item.get("sec_uid") or "")
+    aweme_id = str(item.get("id") or "")
+    return {
+        "aweme_id": aweme_id,
+        "aweme_type": str(item.get("aweme_type") or "0"),
+        "title": str(item.get("title") or ""),
+        "desc": str(item.get("title") or ""),
+        "create_time": item.get("create_time"),
+        "creator_hash": hashlib.sha256(uid.encode()).hexdigest()[:16] if uid else "",
+        "nickname": str(item.get("nickname") or ""),
+        "liked_count": str(item.get("liked") or 0),
+        "collected_count": str(item.get("collected") or 0),
+        "comment_count": str(item.get("comments") or 0),
+        "share_count": str(item.get("shares") or 0),
+        "last_modify_ts": int(time.time() * 1000),
+        "aweme_url": f"https://www.douyin.com/video/{aweme_id}",
+        "cover_url": str(item.get("cover_url") or ""),
+        "video_download_url": str(item.get("play_url") or ""),
+        "music_download_url": "",
+        "note_download_url": "",
+        "source_keyword": keyword,
+        "matched_query": keyword,
+        "search_channel": "kimi_webbridge",
+    }
+
+
+async def collect_with_webbridge(keyword: str, limit: int) -> list[dict]:
+    tabs = await asyncio.to_thread(webbridge_call, "list_tabs", {}, 20)
+    has_tabs = bool(tabs.get("tabs"))
+    url = f"https://www.douyin.com/search/{quote(keyword)}?type=general"
+    navigate_args = {"url": url, "newTab": not has_tabs}
+    if not has_tabs:
+        navigate_args["group_title"] = "抖音竞品抓取"
+    await asyncio.to_thread(webbridge_call, "navigate", navigate_args, 45)
+
+    await asyncio.sleep(5)
+    for _ in range(5):
+        await asyncio.to_thread(
+            webbridge_call,
+            "evaluate",
+            {"code": "window.scrollTo(0,document.body.scrollHeight); true"},
+            20,
+        )
+        await asyncio.sleep(1.8)
+
+    urls_result = await asyncio.to_thread(
+        webbridge_call,
+        "evaluate",
+        {
+            "code": r'''JSON.stringify([...new Set(performance.getEntriesByType("resource")
+              .map(e=>e.name).filter(x=>x.includes("/aweme/v1/web/general/search/single/")))])'''
+        },
+        30,
+    )
+    raw_urls = urls_result.get("value")
+    urls = json.loads(raw_urls) if isinstance(raw_urls, str) else []
+    by_id: dict[str, dict] = {}
+    for endpoint_url in urls:
+        js = f'''(async()=>{{
+      const u={json.dumps(endpoint_url)};
+      const byId={{}};
+      try{{
+        const j=await (await fetch(u,{{credentials:"include"}})).json();
+        for(const item of (j.data||[])){{
+          const a=item.aweme_info||item.aweme_mix_info?.mix_items?.[0];
+          if(!a?.aweme_id) continue;
+          const author=a.author||{{}};
+          const stats=a.statistics||{{}};
+          const video=a.video||{{}};
+          const play=video.play_addr_h264||video.play_addr_256||video.play_addr||{{}};
+          const cover=video.raw_cover||video.origin_cover||{{}};
+          byId[a.aweme_id]={{
+            id:String(a.aweme_id),aweme_type:String(a.aweme_type||0),title:String(a.desc||""),
+            create_time:a.create_time,duration_ms:video.duration||0,nickname:String(author.nickname||""),
+            uid:String(author.uid||""),sec_uid:String(author.sec_uid||""),
+            liked:stats.digg_count||0,comments:stats.comment_count||0,
+            collected:stats.collect_count||0,shares:stats.share_count||0,
+            play_url:(play.url_list||[]).slice(-1)[0]||"",
+            cover_url:(cover.url_list||[]).slice(-1)[0]||""
+          }};
+        }}
+      }}catch(_e){{}}
+      return JSON.stringify({{items:Object.values(byId)}});
+    }})()'''
+        result = await asyncio.to_thread(
+            webbridge_call, "evaluate", {"code": js}, 45
+        )
+        value = result.get("value")
+        payload = json.loads(value) if isinstance(value, str) else {}
+        for item in payload.get("items") or []:
+            if item.get("id"):
+                by_id[str(item["id"])] = item
+        if len(by_id) >= limit:
+            break
+
+    converted = [
+        convert_webbridge_item(item, keyword)
+        for item in by_id.values()
+        if item.get("id")
+    ]
+    return converted[:limit]
+
+    js = r'''(async()=>{
+      const urls=[...new Set(performance.getEntriesByType("resource")
+        .map(e=>e.name).filter(x=>x.includes("/aweme/v1/web/general/search/single/")))];
+      const byId={};
+      for(const u of urls){
+        try{
+          const j=await (await fetch(u,{credentials:"include"})).json();
+          for(const item of (j.data||[])){
+            const a=item.aweme_info||item.aweme_mix_info?.mix_items?.[0];
+            if(!a?.aweme_id) continue;
+            const author=a.author||{};
+            const stats=a.statistics||{};
+            const video=a.video||{};
+            const play=video.play_addr_h264||video.play_addr_256||video.play_addr||{};
+            const cover=video.raw_cover||video.origin_cover||{};
+            byId[a.aweme_id]={
+              id:String(a.aweme_id),aweme_type:String(a.aweme_type||0),title:String(a.desc||""),
+              create_time:a.create_time,duration_ms:video.duration||0,nickname:String(author.nickname||""),
+              uid:String(author.uid||""),sec_uid:String(author.sec_uid||""),
+              liked:stats.digg_count||0,comments:stats.comment_count||0,
+              collected:stats.collect_count||0,shares:stats.share_count||0,
+              play_url:(play.url_list||[]).slice(-1)[0]||"",
+              cover_url:(cover.url_list||[]).slice(-1)[0]||""
+            };
+          }
+        }catch(_e){}
+      }
+      return JSON.stringify({items:Object.values(byId)});
+    })()'''
+    result = await asyncio.to_thread(webbridge_call, "evaluate", {"code": js}, 60)
+    value = result.get("value")
+    payload = json.loads(value) if isinstance(value, str) else {}
+    converted = [
+        convert_webbridge_item(item, keyword)
+        for item in payload.get("items") or []
+        if item.get("id")
+    ]
+    return converted[:limit]
+
+
 async def collect(keyword: str, output: Path, limit: int, chrome_path: str | None, profile_path: Path) -> int:
+    try:
+        webbridge_rows = await collect_with_webbridge(keyword, limit)
+    except Exception as exc:
+        print(
+            "Kimi WebBridge 搜索失败；保留当前已登录标签页，不再启动或关闭其他浏览器："
+            f"{type(exc).__name__}: {exc}"
+        )
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text("[]\n", encoding="utf-8")
+        return 2
+    if webbridge_rows:
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(
+            json.dumps(webbridge_rows, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        print(f"Kimi WebBridge：{keyword} 返回 {len(webbridge_rows)} 条")
+        return 0
+
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text("[]\n", encoding="utf-8")
+    print(f"Kimi WebBridge：{keyword} 返回 0 条；保留当前标签页，不启动旧浏览器")
+    return 2
+
     payloads: list[dict] = []
     response_tasks: list[asyncio.Task] = []
     search_response_urls: list[str] = []
@@ -165,7 +353,7 @@ async def collect(keyword: str, output: Path, limit: int, chrome_path: str | Non
             if "aweme/v1" in url or "/api/" in url or "search/single" in url
         ]
         for url in (interesting or search_response_urls)[:20]:
-            print(f"  {url}")
+            print(f"  {urlsplit(url).path}")
     return 0 if rows else 2
 
 

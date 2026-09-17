@@ -365,6 +365,8 @@ def search_queries_for_keyword(config: dict, keyword: str) -> list[str]:
     """Return stable fallbacks while keeping the configured keyword as the bucket."""
     search_policy = config.get("search_policy", {})
     configured = search_policy.get("keyword_fallbacks", {}).get(keyword, [])
+    if keyword.upper().startswith('AI'):
+        configured = [q for q in configured if 'AI' in q.upper() or '人工智能' in q]
     queries = [keyword, *configured]
     if keyword.startswith("AI") and not keyword.startswith("AI "):
         queries.append("AI " + keyword[2:])
@@ -473,53 +475,7 @@ def delete_processed_videos(
     analysis_path: Path,
     workbook_path: Path,
 ) -> int:
-    manifest = read_json(manifest_path)
-    if not isinstance(manifest, dict):
-        raise RuntimeError(f"待分析数据无效：{manifest_path}")
-    validate_analysis_complete(manifest, analysis_path)
-    if not workbook_path.is_file():
-        raise RuntimeError("Excel 尚未成功生成，拒绝删除原视频")
-
-    items = manifest.get("items", [])
-    missing_transcripts = []
-    for item in items:
-        transcript_path = item.get("transcript_path")
-        if not transcript_path or not Path(transcript_path).is_file():
-            missing_transcripts.append(str(item.get("aweme_id") or ""))
-    if missing_transcripts:
-        raise RuntimeError(
-            "以下视频缺少已保存口播稿，拒绝删除原视频："
-            + ", ".join(missing_transcripts)
-        )
-
-    deleted = 0
-    deleted_at = datetime.now(SHANGHAI).isoformat()
-    allowed_root = manifest_path.parent.resolve()
-    for item in items:
-        video_path = item.get("video_path")
-        if video_path:
-            path = Path(video_path).expanduser().resolve()
-            if path.is_file():
-                try:
-                    path.relative_to(allowed_root)
-                except ValueError as exc:
-                    raise RuntimeError(f"拒绝删除运行目录之外的视频：{path}") from exc
-                path.unlink()
-                deleted += 1
-        item["video_path"] = None
-        item["video_deleted_at"] = deleted_at
-        item["video_status"] = "已完成转录与分析，原视频已删除"
-    write_json(manifest_path, manifest)
-    write_json(
-        manifest_path.parent / "视频清理记录.json",
-        {
-            "deleted_at": deleted_at,
-            "deleted_count": deleted,
-            "kept_transcripts": len(items),
-            "workbook": str(workbook_path),
-        },
-    )
-    return deleted
+    raise RuntimeError('自动删除已停用。研究完成与清理分开；请保留原视频供复核。')
 
 
 def filter_search_rows(
@@ -670,7 +626,7 @@ def attach_local_files(items: list[dict], source_root: Path) -> None:
                 if segments:
                     duration = round(float(segments[-1].get("end") or 0))
                     break
-        item["duration_seconds"] = duration
+        item["transcript_end_seconds"] = duration
 
 
 def download_from_search_urls(items: list[dict], run_dir: Path) -> int:
@@ -707,6 +663,7 @@ def download_from_search_urls(items: list[dict], run_dir: Path) -> int:
         try:
             duration = probe_video(target)
             if duration > 0:
+                item["media_duration_seconds"] = duration
                 item["duration_seconds"] = round(duration)
         except RuntimeError as exc:
             target.unlink(missing_ok=True)
@@ -762,7 +719,7 @@ def transcribe_videos(items: list[dict], run_dir: Path, config: dict) -> None:
         transcript_json = output_dir / f"{aweme_id}.json"
         payload = read_json(transcript_json)
         if isinstance(payload, dict) and payload.get("segments"):
-            item["duration_seconds"] = round(
+            item["transcript_end_seconds"] = round(
                 float(payload["segments"][-1].get("end") or 0)
             )
 
@@ -851,6 +808,8 @@ def finalize_workbook(
 
 
 def collect(args, config: dict) -> int:
+    if not getattr(args, "legacy_collector", False):
+        raise RuntimeError("新版先用 Computer Use 取得页面观察，再用 research_batch.py 建立批次；如明确需要旧采集器，添加 --legacy-collector。Kimi 不是新版依赖。")
     if not config.get("compliance_acknowledged"):
         raise RuntimeError(
             "尚未确认 MediaCrawler 许可证与平台边界。请先运行 scripts/start.py，选择“首次设置”。"
@@ -905,7 +864,58 @@ def collect(args, config: dict) -> int:
                 }
             )
             print(f"  复用今日断点：{len(cached_rows)} 条，无需重复搜索", flush=True)
-        for attempt in range(1, max_attempts + 1):
+
+        # 优先复用用户当前已登录的真实 Chrome 标签页。只有 WebBridge 失败时，
+        # 才考虑旧搜索接口；避免反复启动/关闭另一套浏览器。
+        if not keyword_ok and search_policy.get("page_ui_fallback", False):
+            save_path = (
+                run_dir
+                / "search"
+                / f"{index:02d}_{slug(keyword)}"
+                / "webbridge_primary"
+                / "douyin"
+                / "json"
+            )
+            output_path = save_path / f"search_contents_{datetime.now(SHANGHAI):%Y-%m-%d}.json"
+            command = [
+                config["paths"]["media_crawler_python"],
+                str(MODULE_DIR / "search_page_fallback.py"),
+                "--keyword",
+                keyword,
+                "--output",
+                str(output_path),
+                "--limit",
+                str(config["run_policy"]["results_per_keyword"]),
+                "--profile-path",
+                config["paths"]["browser_profile"],
+            ]
+            if config["paths"].get("chrome_path"):
+                command.extend(["--chrome-path", config["paths"]["chrome_path"]])
+            error = None
+            used_network = True
+            try:
+                run_command(command, PROJECT_ROOT)
+            except RuntimeError as exc:
+                error = str(exc)
+            result_count = count_search_results(save_path)
+            attempts.append(
+                {
+                    "attempt": "webbridge_primary",
+                    "query": keyword,
+                    "result_count": result_count,
+                    "error": error,
+                    "browser_mode": "kimi_webbridge",
+                }
+            )
+            if error is None and result_count >= min_results:
+                keyword_ok = True
+                save_search_checkpoint(
+                    keyword,
+                    load_rows(save_path, "search_contents_*.json"),
+                )
+                print(f"  已登录 Chrome 取回 {result_count} 条", flush=True)
+        legacy_attempts = [] if search_policy.get("webbridge_only", False) else range(1, max_attempts + 1)
+        for attempt in legacy_attempts:
             if keyword_ok:
                 break
             query = search_queries[min(attempt - 1, len(search_queries) - 1)]
@@ -959,7 +969,11 @@ def collect(args, config: dict) -> int:
                     flush=True,
                 )
                 time.sleep(retry_wait)
-        if not keyword_ok and search_policy.get("page_ui_fallback", False):
+        if (
+            not keyword_ok
+            and search_policy.get("page_ui_fallback", False)
+            and not search_policy.get("webbridge_only", False)
+        ):
             save_path = (
                 run_dir
                 / "search"
@@ -1122,6 +1136,7 @@ def collect(args, config: dict) -> int:
             try:
                 duration = probe_video(video_path)
                 if duration > 0:
+                    row["media_duration_seconds"] = duration
                     row["duration_seconds"] = round(duration)
             except RuntimeError as exc:
                 print(f"  视频校验失败：{exc}", flush=True)
@@ -1231,23 +1246,6 @@ def finalize(args, config: dict) -> int:
         else None,
     )
     deleted = 0
-    if config.get("cleanup", {}).get(
-        "delete_video_after_analysis_and_excel", False
-    ):
-        deleted = delete_processed_videos(
-            manifest_path,
-            analysis_path,
-            output,
-        )
-        # 清理会更新 manifest 中的真实视频状态；重建一次工作簿，避免 Excel
-        # 永远停留在“等待清理”。以刚生成的工作簿为输入可保留历史行和样式。
-        output = finalize_workbook(
-            run_dir,
-            manifest_path,
-            analysis_path,
-            config,
-            output,
-        )
     state = load_state()
     manifest = read_json(manifest_path, {}) or {}
     finalized_ids = {
@@ -1265,6 +1263,9 @@ def finalize(args, config: dict) -> int:
     checkpoint.update(
         {
             "status": "complete",
+            "research_status": "evidence_reviewed",
+            "export_status": "saved_and_reopened",
+            "media_retention": "retained",
             "finalized_at": datetime.now(SHANGHAI).isoformat(),
             "workbook": str(output),
             "deleted_video_count": deleted,
@@ -1276,7 +1277,7 @@ def finalize(args, config: dict) -> int:
     state["last_completed_run_dir"] = str(run_dir)
     save_state(state)
     print(f"Excel：{output}")
-    print(f"已删除完成转录和分析的原视频：{deleted} 个")
+    print('已保留原视频；研究完成不触发删除。')
     return 0
 
 
@@ -1305,6 +1306,7 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     collect_parser = subparsers.add_parser("collect", help="联网采集并准备待分析数据")
+    collect_parser.add_argument("--legacy-collector", action="store_true", help="显式使用旧采集器；新版使用 research_batch.py")
     collect_parser.add_argument("--keywords", help="逗号分隔；省略则轮换默认关键词")
     collect_parser.add_argument("--all-keywords", action="store_true")
     collect_parser.add_argument("--skip-download", action="store_true")

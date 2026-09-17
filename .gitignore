@@ -27,4 +27,11 @@ __pycache__/
 *.pyc
 .venv/
 node_modules/
-
+outputs/
+**/outputs/
+*.log
+*.pt
+*.safetensors
+.env
+.env.*
+!.env.example

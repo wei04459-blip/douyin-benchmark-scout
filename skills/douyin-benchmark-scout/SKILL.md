@@ -1,106 +1,33 @@
 ---
 name: douyin-benchmark-scout
-description: Run an end-to-end, resumable Douyin competitor-research workflow covering multi-keyword search, false-empty recovery, public video and creator metrics, quota filtering, download, local Whisper transcription, S/A/B/C low-follower breakout classification, AI script analysis, verified Excel output, focus-account extraction, and safe source-video cleanup. Use when the user asks to 抓取抖音竞品、跑一轮多词、找低粉高爆、下载并转录对标视频、修复关键词空结果、更新竞品Excel、分析爆款口播/钩子/结构、生成可拍选题，or package/recover this workflow on another computer.
+description: Batch collect relevant public Douyin viral competitor videos, verify follower and interaction metrics, classify low-follower breakouts, prepare media and text, and deliver initial content analysis in sortable Excel. Use for 抖音爆款竞品收集、对标视频分析、赞粉比分级和历史假完成排查.
 ---
 
-# 抖音竞品选题侦察
+# 抖音爆款竞品收集与初步分析
 
-把抖音公开竞品研究当成可审计的数据流水线。搜索成功不等于任务成功；必须完成逐词配额、转录、分析、工作簿校验和安全清理。
+替用户省去逐个搜索、查粉丝、抄数据、保存视频和初读整理的劳动。交付可持续积累的竞品库，帮助用户决定哪些选题、结构和账号值得继续研究。批量收集加初步分析是默认任务；不能改成少量精读、工具验证或先写选题。
 
-## 对新手的交互原则
+## 默认执行
 
-- 先替用户执行体检并翻译结果，不让用户自己猜命令或错误信息。
-- 安装、扫码、合规确认和选择关键词之外，能由代理完成的步骤直接完成。
-- 默认低占用，不因追求速度提高并发、Whisper 模型或线程数。
-- 失败时保留断点，明确告诉用户“已完成到哪、什么没完成、继续时会不会重复”。
-- 最终只把可打开的 Excel、数量摘要和需要用户判断的内容交付出来。
+先读 [批量执行流程](references/new-workflow.md)、[原30列工作簿](references/workbook-contract.md) 和 [赞粉比分级](references/classification-rules.md)。统一入口 `scripts/start.py`，以用户当前输出目录为批次。默认推进50条合格视频与配置中的所有关键词；用户具体要求优先，不暗改时间和门槛。恢复任务先运行 `next`，根据待办继续；`resume` 负责可执行的机械步骤和有限重试，代理接续相关性选择、全文初读与视觉检查。
 
-## 第一次运行
+持续完成搜索、相关性筛选、公开指标补齐、分级、材料准备和逐条初步分析。先盘点已有下载项目与可复用材料，再选浏览器通道。Computer Use 与 Kimi 都可用，选当前实际可用的一条，不重复折腾浏览器。使用独立研究页。
 
-1. 先阅读 `references/privacy-compliance.md`。若用途与上游许可证或平台规则冲突，暂停并说明限制。
-2. 新手优先运行 `python scripts/start.py`，按中文菜单完成合规确认、体检、配置和第一次低占用批次。macOS 可双击 `开始使用.command`，Windows 可双击 `开始使用.bat`。
-3. 缺依赖时先运行 `python scripts/bootstrap.py` 查看安装计划。只有用户明确允许联网安装后才加 `--apply`。
-4. 默认配置会复制到 `~/.douyin-benchmark-scout/config.json`；不要修改 Skill 内的示例文件来保存登录信息或私人路径。
-5. 首次搜索由用户本人扫码登录。不得导出 Cookie 或浏览器资料。
+搜索成功、收录、指标核实、视频下载、文本准备和初步分析分别记录。每页新增先保存，范围完成取本词最新尝试。达到本词目标或明确验证结果已尽才结束；停滞、超时、重试耗尽都保留为未完成。Computer Use 通过 `search_checkpoint.py` 接入同一台账。公开粉丝未拿到就留空，不猜赞粉比。200空响应、页面没加载、转录文件存在均不能证明成功。
 
-## 标准流程
+初读要求全文阅读与关键画面核对，重点检查影响判断的专名、数字和引用。画面承载主要内容时明确记录画面文字，不冒充口播。内容结构从实际材料提取；不靠标题填满表，也不把收入故事或单条互动当成因果证明。
 
-### 1. 明确批次
+队列失败不阻塞其他作品。正常重试有上限，原失败保留；入选后不删除失败项来制造完成。平台验证码出现时停止受限通道，用户解除后接续。除必要澄清或真实障碍，连续推进到可交付。
 
-确认关键词、时间窗口、每词配额、总下载上限和输出位置。用户说“跑一轮”时使用配置中的关键词轮换；用户给出关键词时精确使用，不把宽泛根词结果混入正式批次。
+同批转录复用模型进程，逐片段保存。空白或失败片段阻止材料通过，其他片段可继续复用；已有完整视频不重复下载。具体状态、恢复边界与旧批兼容见 [接续和验收机制](references/recovery-contract.md)。
 
-运行前查看状态：
+## 交付与条件分支
 
-```bash
-python scripts/run.py status
-```
+恢复30列主表、S/A重点账号、真实材料状态及可追溯依据。Excel导出后重开并查看所有表，完成回执绑定本次数据、分析与文件。仅修改skill或少数样本通过不能称全流程可用。
 
-### 2. 采集、下载和转录
-
-正式多词示例：
-
-```bash
-python scripts/run.py collect \
-  --keywords "AI自媒体,AI搞钱,AI创业" \
-  --per-keyword 2 \
-  --download-limit 6
-```
-
-默认单并发、可见搜索、关键词间隔和低资源转录。不要擅自提高并发。默认使用 Whisper `base`、`threads: 1`，一次只处理一条。
-
-搜索出现空结果时，完整执行 `references/search-reliability.md`。任何关键词未达配额都视为整批未完成；保留检查点并恢复，不得伪造空关键词成功状态。
-
-### 3. 完成 AI 拆解
-
-读取运行目录中的 `待分析数据.json`、每条 `transcripts/<作品ID>/<作品ID>.txt` 和 `AI拆解模板.json`。先处理 S，再处理 A，最后 B/C。
-
-按 `references/analysis-schema.md` 填写全部字段。保留真实开头语句，区分视频原话、可验证事实和推断。账号定位只从用户明确提供的本地资料读取；不得把私人资料写入 Skill、配置或仓库。
-
-### 4. 生成并验证 Excel
-
-```bash
-python scripts/run.py finalize \
-  --run <运行目录> \
-  --analysis <完成后的AI拆解.json> \
-  --input-workbook <可选的已有工作簿.xlsx>
-```
-
-生成器会更新重复作品、严格对齐 30 列、重建 `重点关注账号`、保存后重新打开校验，并生成 HTML 预览。按 `references/workbook-contract.md` 检查主表和重点表；等级规则见 `references/classification-rules.md`。
-
-只有 finalize 成功后才把作品写入 `processed_aweme_ids`。任何分析缺失、XLSX 无法重开或字段错位都必须阻止清理。
-
-关键词游标也只能在 finalize 完成后推进。采集阶段把候选游标写入运行目录的 `批次状态.json`；不得提前提交。
-
-### 5. 安全清理和交付
-
-清理仅针对当前运行目录中已有口播稿且已经写入验证工作簿的明确视频文件。保留：
-
-- 完整口播稿；
-- AI 分析 JSON；
-- 搜索状态与检查点；
-- 最终 Excel 和预览；
-- 清理结果。
-
-向用户汇报每词结果数、最终视频数、S/A/B/C 数量、失败或待核验项、Excel 路径、保留口播稿数和删除视频数。
-
-## 恢复与专项操作
-
-- 查看断点：`python scripts/run.py status`
-- 仅验证已有缓存：`python scripts/run.py dry-run --source <缓存目录>`
-- 不下载：`collect --skip-download --skip-transcribe`，只可用于诊断，不能标记正式完成。
-- 只重建 Excel：对已有运行目录重新执行 `finalize`。
-- 页面搜索兜底：由主流程自动调用 `search_page_fallback.py`。
-- 作者公开指标补充：由主流程自动调用 `enrich_creator_metrics.py`。
-- 迁移旧缓存：先运行 `python scripts/migrate_legacy.py --source <旧缓存目录>` 预览；确认后加 `--copy-transcripts --apply`。只复制状态、最新 Excel 和口播稿，绝不复制或删除旧视频。
-
-## 数据位置
-
-默认运行数据位于 `~/.douyin-benchmark-scout/`。可用环境变量覆盖：
-
-- `DOUYIN_SCOUT_HOME`
-- `DOUYIN_SCOUT_CONFIG`
-- `MEDIACRAWLER_ROOT`
-- `MEDIACRAWLER_PYTHON`
-- `CHROME_PATH`
-
-绝不把 `.auth/`、浏览器 profile、Cookie、真实视频、真实口播稿、真实工作簿或本地账号资料提交 GitHub。
+- 目标纠偏或参考旧表：读 [收集目标](references/collection-purpose.md)。
+- 本机浏览器/下载故障：读 [已实测路径](references/search-and-session.md)。已有开源项目优先；无需新建一套下载器。
+- 单个本地视频导入：`scripts/prepare_video.py`；它只是材料入口，不替代批量收集。
+- 审计旧假完成：读 [材料契约](references/evidence-contract.md)，用 verify_evidence.py，只读旧表，不回写为已审核。
+- 用户明确要深拆或逐句研究：使用 research_batch.py / export_reviewed.mjs 的精读路线，按 [分析字段](references/analysis-schema.md) 扩展；默认初读无需全片逐字OCR。
+- 旧 MediaCrawler 兼容：run.py collect --legacy-collector，使用前读 [依赖与隐私](references/privacy-compliance.md)。旧下载上限不限制新批量规模。

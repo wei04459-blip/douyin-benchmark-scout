@@ -1,4 +1,4 @@
 interface:
-  display_name: "抖音竞品选题侦察"
-  short_description: "新手也能完成抖音竞品采集、转录、分级和Excel归档"
-  default_prompt: "Use $douyin-benchmark-scout to guide me through first-time setup and run one safe, low-resource Douyin competitor batch."
+  display_name: "抖音爆款竞品收集"
+  short_description: "批量收集竞品，补齐赞粉比分级、原视频与初步分析，整理成Excel"
+  default_prompt: "使用 $douyin-benchmark-scout 收集一批相关的抖音爆款竞品，包含教学内容，补齐粉丝与互动指标，按赞粉比分级，核实原视频和文本，逐条完成初步分析并交付Excel。接续已有进度，持续执行到验收完成。"

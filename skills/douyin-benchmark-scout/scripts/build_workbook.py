@@ -9,6 +9,7 @@ import os
 import re
 from datetime import datetime
 from pathlib import Path
+from verify_evidence import require_ready
 
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
@@ -79,7 +80,7 @@ def make_row(item, analysis, serial, rules):
         if item.get("video_deleted_at"):
             video_status = "已完成转录与分析，原视频已删除"
         elif transcript and item.get("video_path"):
-            video_status = "已完成转录与分析，等待安全清理"
+            video_status = "已完成材料审核，原视频保留"
         elif transcript:
             video_status = "已保留口播稿，本地原视频不存在"
         else:
@@ -181,6 +182,53 @@ def rebuild_focus(wb, source, rules):
     ws.freeze_panes = "A16"
 
 
+def rebuild_comments(wb, items):
+    """Keep the public comment bodies that were actually visible on each video page."""
+    if "可见评论正文" in wb.sheetnames:
+        del wb["可见评论正文"]
+    ws = wb.create_sheet("可见评论正文")
+    ws.sheet_view.showGridLines = False
+    headers = [
+        "视频ID", "视频标题", "账号名", "视频链接", "评论序号",
+        "评论者（脱敏）", "评论正文", "评论时间/地区", "评论点赞",
+    ]
+    ws.append(headers)
+    for item in items:
+        comments = item.get("visible_comments") or []
+        for index, comment in enumerate(comments, 1):
+            ws.append(
+                [
+                    str(item.get("aweme_id") or ""),
+                    normalize(item.get("title") or item.get("desc")),
+                    item.get("nickname") or "",
+                    item.get("aweme_url") or f"https://www.douyin.com/video/{item['aweme_id']}",
+                    index,
+                    comment.get("commenter") or "",
+                    normalize(comment.get("content")),
+                    comment.get("time_location") or "",
+                    number(comment.get("like_count")),
+                ]
+            )
+    for cell in ws[1]:
+        cell.fill = PatternFill("solid", fgColor="2F5597")
+        cell.font = Font(color="FFFFFF", bold=True)
+        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    widths = [21, 46, 18, 38, 10, 18, 70, 20, 12]
+    for index, width in enumerate(widths, 1):
+        ws.column_dimensions[get_column_letter(index)].width = width
+    for row in range(2, ws.max_row + 1):
+        for cell in ws[row]:
+            cell.alignment = Alignment(vertical="top", wrap_text=True)
+            cell.border = Border(left=THIN, right=THIN, top=THIN, bottom=THIN)
+        ws.row_dimensions[row].height = 54
+    if ws.max_row >= 2:
+        table = Table(displayName="可见评论正文表", ref=f"A1:I{ws.max_row}")
+        table.tableStyleInfo = TableStyleInfo(name="TableStyleMedium2", showRowStripes=True)
+        ws.add_table(table)
+    ws.freeze_panes = "A2"
+    ws.auto_filter.ref = f"A1:I{max(1, ws.max_row)}"
+
+
 def write_preview(ws, path: Path, limit=12):
     rows = list(ws.iter_rows(min_row=1, max_row=min(ws.max_row, limit), values_only=True))
     body = ["<meta charset='utf-8'><style>table{border-collapse:collapse;font:12px sans-serif}th,td{border:1px solid #b4c6e7;padding:6px;max-width:260px}th{background:#1f4e78;color:white}tr:nth-child(even){background:#ddebf7}</style><table>"]
@@ -192,6 +240,7 @@ def write_preview(ws, path: Path, limit=12):
 
 
 def main():
+    require_ready(Path(os.environ['BENCHMARK_MANIFEST']), Path(os.environ['BENCHMARK_ANALYSIS']))
     manifest = read_json("BENCHMARK_MANIFEST")
     analysis_payload = read_json("BENCHMARK_ANALYSIS")
     analysis_by_id = analysis_payload.get("items", analysis_payload)
@@ -233,6 +282,7 @@ def main():
         ws.cell(row, 1, row - 1)
     style_source(ws)
     rebuild_focus(wb, ws, rules)
+    rebuild_comments(wb, items)
     output = Path(os.environ["BENCHMARK_OUTPUT_XLSX"])
     output.parent.mkdir(parents=True, exist_ok=True)
     temp = output.with_suffix(".tmp.xlsx")
@@ -250,6 +300,7 @@ def main():
     preview_dir.mkdir(parents=True, exist_ok=True)
     write_preview(check["竞品选题分析"], preview_dir / "竞品选题分析.html")
     write_preview(check["重点关注账号"], preview_dir / "重点关注账号.html", limit=30)
+    write_preview(check["可见评论正文"], preview_dir / "可见评论正文.html", limit=40)
     print(json.dumps({"output": str(output), "rows": check["竞品选题分析"].max_row - 1, "focus_accounts": max(0, check["重点关注账号"].max_row - 15)}, ensure_ascii=False))
 
 
